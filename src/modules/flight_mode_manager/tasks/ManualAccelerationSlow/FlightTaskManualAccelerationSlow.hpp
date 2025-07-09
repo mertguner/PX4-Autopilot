@@ -49,6 +49,7 @@
 #include <uORB/topics/manual_control_setpoint.h>
 #include <uORB/topics/velocity_limits.h>
 #include <systemlib/mavlink_log.h>
+#include <matrix/matrix/math.hpp>
 
 class FlightTaskManualAccelerationSlow : public FlightTaskManualAcceleration
 {
@@ -76,6 +77,11 @@ private:
 
 	uORB::Subscription _takeoff_status_sub{ORB_ID(takeoff_status)};
 	bool haveTakenOff();
+
+	// Terrain following obstacle logic
+	bool _obstacle_hold{false};
+	matrix::Vector2f _obstacle_start_position_xy{};
+	float _hold_altitude{0.f};
 
 	DEFINE_PARAMETERS_CUSTOM_PARENT(FlightTaskManualAcceleration,
 					(ParamInt<px4::params::MC_SLOW_MAP_HVEL>) _param_mc_slow_map_hvel,

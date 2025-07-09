@@ -37,6 +37,7 @@
 
 #include "FlightTaskManualAccelerationSlow.hpp"
 #include <px4_platform_common/events.h>
+#include <mathlib/mathlib.h>
 
 using namespace time_literals;
 using namespace matrix;
@@ -130,6 +131,52 @@ bool FlightTaskManualAccelerationSlow::update()
 	FlightTaskManualAcceleration::_stick_yaw.setYawspeedConstraint(yaw_rate);
 
 	bool ret = FlightTaskManualAcceleration::update();
+
+	// Terrain following using RC channels 7 and 8 directly
+	const float tf_enable_input = _sticks.getAux()(1); // RC channel 7
+	bool terrain_active = tf_enable_input > 0.5f;
+
+	if (terrain_active && PX4_ISFINITE(_dist_to_bottom)) {
+		float alt_input = _sticks.getAux()(2); // RC channel 8
+		float desired_hagl = 0.30f;
+		constexpr float sensor_to_foot_offset = 0.28f; // sensor sits 28 cm above the landing gear
+
+		// actual clearance measured from the landing gear
+		const float dist_from_feet = math::max(_dist_to_bottom - sensor_to_foot_offset, 0.f);
+
+		if (alt_input < -0.5f) {
+			desired_hagl = 0.05f;
+		} else if (alt_input < 0.5f) {
+			desired_hagl = 0.30f;
+		} else {
+			desired_hagl = 0.50f;
+		}
+
+		// Detect obstacle when we are below the desired distance
+		if (dist_from_feet < desired_hagl - 0.05f && !_obstacle_hold) {
+			_obstacle_hold = true;
+			_obstacle_start_position_xy = _position.xy();
+			_hold_altitude = _position(2);
+		}
+
+		if (_obstacle_hold) {
+			const float travelled = matrix::Vector2f(_position.xy() - _obstacle_start_position_xy).length();
+			if (travelled > 0.5f && dist_from_feet >= desired_hagl - 0.02f) {
+				_obstacle_hold = false;
+			}
+		}
+
+		if (_obstacle_hold) {
+			_position_setpoint(2) = _hold_altitude;
+		} else {
+			_position_setpoint(2) = _position(2) - (desired_hagl - dist_from_feet);
+		}
+
+		_velocity_setpoint(2) = 0.f;
+		_acceleration_setpoint(2) = 0.f;
+	} else {
+		_obstacle_hold = false;
+	}
 
 	// Optimize input-to-video latency gimbal control
 	if (_gimbal.checkForTelemetry(_time_stamp_current) && haveTakenOff()) {
