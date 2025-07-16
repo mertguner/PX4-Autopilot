@@ -48,6 +48,8 @@
 #include <uORB/Subscription.hpp>
 #include <uORB/topics/manual_control_setpoint.h>
 #include <uORB/topics/velocity_limits.h>
+#include <uORB/topics/input_rc.h>
+#include <uORB/uORB.h>
 #include <systemlib/mavlink_log.h>
 #include <matrix/matrix/math.hpp>
 
@@ -79,9 +81,13 @@ private:
 	bool haveTakenOff();
 
 	// Terrain following obstacle logic
-	bool _obstacle_hold{false};
-	matrix::Vector2f _obstacle_start_position_xy{};
-	float _hold_altitude{0.f};
+	float last_tf_enable_input = -1.0f;
+	float last_alt_input = -1.0f;
+	float last_current_x = -1.0f;
+	float last_current_y = -1.0f;
+	int _rc_sub{-1};
+	int _local_pos_sub{-1};
+	const float sensor_to_foot_offset = 0.28f; // sensor sits 28 cm above the landing gear
 
 	DEFINE_PARAMETERS_CUSTOM_PARENT(FlightTaskManualAcceleration,
 					(ParamInt<px4::params::MC_SLOW_MAP_HVEL>) _param_mc_slow_map_hvel,

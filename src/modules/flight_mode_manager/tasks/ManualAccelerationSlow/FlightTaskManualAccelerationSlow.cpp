@@ -132,50 +132,55 @@ bool FlightTaskManualAccelerationSlow::update()
 
 	bool ret = FlightTaskManualAcceleration::update();
 
-	// Terrain following using RC channels 7 and 8 directly
-	const float tf_enable_input = _sticks.getAux()(1); // RC channel 7
-	bool terrain_active = tf_enable_input > 0.5f;
+	if (_rc_sub < 0) {
+		_rc_sub = orb_subscribe(ORB_ID(input_rc));
+	}
+	if (_rc_sub >= 0) {
+    		input_rc_s rc_data;
+    		if (orb_copy(ORB_ID(input_rc), _rc_sub, &rc_data) == PX4_OK) {
+			// RC channel 5 ve 6 değerleri
+			float tf_enable_input = math::constrain(((rc_data.values[4] - 1000.0f) / 1000.0f), 0.0f, 1.0f);
+			bool terrain_active = tf_enable_input > 0.5f;
 
-	if (terrain_active && PX4_ISFINITE(_dist_to_bottom)) {
-		float alt_input = _sticks.getAux()(2); // RC channel 8
-		float desired_hagl = 0.30f;
-		constexpr float sensor_to_foot_offset = 0.28f; // sensor sits 28 cm above the landing gear
+			if (fabsf(tf_enable_input - last_tf_enable_input) > 0.01f) {
+            			PX4_INFO("RC Channel 5: %f", (double)tf_enable_input);
+            			last_tf_enable_input = tf_enable_input;
+        		}
 
-		// actual clearance measured from the landing gear
-		const float dist_from_feet = math::max(_dist_to_bottom - sensor_to_foot_offset, 0.f);
+			if (terrain_active && PX4_ISFINITE(_dist_to_bottom)) {
+				float alt_input = math::constrain(((rc_data.values[5] - 1000.0f) / 1000.0f), 0.0f, 1.0f);
+				float desired_hagl = 0.05f + (0.25f * alt_input);
 
-		if (alt_input < -0.5f) {
-			desired_hagl = 0.05f;
-		} else if (alt_input < 0.5f) {
-			desired_hagl = 0.30f;
-		} else {
-			desired_hagl = 0.50f;
-		}
+				// actual clearance measured from the landing gear
+				const float dist_from_feet = math::max(_dist_to_bottom - sensor_to_foot_offset, 0.f);
 
-		// Detect obstacle when we are below the desired distance
-		if (dist_from_feet < desired_hagl - 0.05f && !_obstacle_hold) {
-			_obstacle_hold = true;
-			_obstacle_start_position_xy = _position.xy();
-			_hold_altitude = _position(2);
-		}
+				if (fabsf(alt_input - last_alt_input) > 0.01f) {
+					PX4_INFO("RC Channel 6: %.2f : %.2f", (double)alt_input, (double)dist_from_feet);
+					last_alt_input = alt_input;
+				}
 
-		if (_obstacle_hold) {
-			const float travelled = matrix::Vector2f(_position.xy() - _obstacle_start_position_xy).length();
-			if (travelled > 0.5f && dist_from_feet >= desired_hagl - 0.02f) {
-				_obstacle_hold = false;
+				if (_local_pos_sub < 0) {
+				_local_pos_sub = orb_subscribe(ORB_ID(vehicle_local_position));
+				}
+
+				vehicle_local_position_s local_pos;
+				if (orb_copy(ORB_ID(vehicle_local_position), _local_pos_sub, &local_pos) == PX4_OK) {
+					float current_x = local_pos.x;
+					float current_y = local_pos.y;
+					float current_z = _position(2) - (desired_hagl - dist_from_feet);
+
+					if (fabsf(current_x - last_current_x) > 0.01f || fabsf(current_y - last_current_y) > 0.01f) {
+						PX4_INFO("Center Koordinate : %.2f : %.2f : %.2f", (double)current_x, (double)current_y, (double)current_z);
+						last_current_x = current_x;
+						last_current_y = current_y;
+					}
+
+					_position_setpoint(2) = _position(2) - (desired_hagl - dist_from_feet);
+					_velocity_setpoint(2) = 0.f;
+					_acceleration_setpoint(2) = 0.f;
+				}
 			}
 		}
-
-		if (_obstacle_hold) {
-			_position_setpoint(2) = _hold_altitude;
-		} else {
-			_position_setpoint(2) = _position(2) - (desired_hagl - dist_from_feet);
-		}
-
-		_velocity_setpoint(2) = 0.f;
-		_acceleration_setpoint(2) = 0.f;
-	} else {
-		_obstacle_hold = false;
 	}
 
 	// Optimize input-to-video latency gimbal control
