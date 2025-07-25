@@ -38,9 +38,89 @@
 #include "FlightTaskManualAccelerationSlow.hpp"
 #include <px4_platform_common/events.h>
 #include <mathlib/mathlib.h>
+#include <geo/geo.h>
 
 using namespace time_literals;
 using namespace matrix;
+
+void set_max_tilt_angle(float degrees) {
+    param_t tiltmax_air_handle = param_find("MPC_TILTMAX_AIR");
+    if (tiltmax_air_handle != PARAM_INVALID) {
+        param_set(tiltmax_air_handle, &degrees);
+        // Değişikliklerin etkili olması için gerekirse param_save_default() fonksiyonu çağırabilirsin.
+    }
+}
+
+void FlightTaskManualAccelerationSlow::update_gps_history(const LocalXYZ &current_gps)
+{
+    // 1) Mevcut tüm elemanlarla mesafeyi kontrol et
+    bool is_far_enough = true;
+    for (size_t i = 0; i < _gps_history_len; ++i) {
+        float dx = _gps_history[i].x - current_gps.x;
+        float dy = _gps_history[i].y - current_gps.y;
+        float distance = sqrtf(dx * dx + dy * dy);
+        if (distance < MIN_DISTANCE_M) {
+            is_far_enough = false;
+            break;
+        }
+    }
+    if (!is_far_enough)
+        return; // Eklenmeyecek
+
+    // 2) Doluysa en uzak noktayı bul ve çıkar
+    if (_gps_history_len >= MAX_HISTORY_SIZE) {
+        float max_dist = -1.0f;
+        size_t farthest_idx = 0;
+        for (size_t i = 0; i < _gps_history_len; ++i) {
+            float dx = _gps_history[i].x - current_gps.x;
+            float dy = _gps_history[i].y - current_gps.y;
+            float distance = sqrtf(dx * dx + dy * dy);
+            if (distance > max_dist) {
+                max_dist = distance;
+                farthest_idx = i;
+            }
+        }
+        // En uzaktakini çıkarmak için tüm elemanları bir sola kaydır
+        for (size_t i = farthest_idx; i + 1 < _gps_history_len; ++i) {
+            _gps_history[i] = _gps_history[i + 1];
+        }
+        --_gps_history_len;
+    }
+
+    // 3) Yeni koordinatı sona ekle
+    if (_gps_history_len < MAX_HISTORY_SIZE) {
+        _gps_history[_gps_history_len++] = current_gps;
+    }
+}
+
+bool FlightTaskManualAccelerationSlow::is_point_in_rotated_square(float x, float y, float cx, float cy, float yaw_rad)
+{
+    float dx = x - cx;
+    float dy = y - cy;
+
+    float cos_yaw = cosf(-yaw_rad);
+    float sin_yaw = sinf(-yaw_rad);
+
+    float local_x = cos_yaw * dx - sin_yaw * dy;
+    float local_y = sin_yaw * dx + cos_yaw * dy;
+
+    return (fabsf(local_x) <= AREA_HALF && fabsf(local_y) <= AREA_HALF);
+}
+
+float FlightTaskManualAccelerationSlow::find_points_in_area(const LocalXYZ &center, float yaw_rad)
+{
+    float result = center.z;
+    float min = center.z;
+
+    for (size_t i = 0; i < _gps_history_len; ++i) {
+        const LocalXYZ &pt = _gps_history[i];
+        if (is_point_in_rotated_square(pt.x, pt.y, center.x, center.y, yaw_rad) && min > pt.z) {
+            result = pt.z;
+            min = pt.z;
+        }
+    }
+    return result;
+}
 
 bool FlightTaskManualAccelerationSlow::update()
 {
@@ -165,19 +245,35 @@ bool FlightTaskManualAccelerationSlow::update()
 
 				vehicle_local_position_s local_pos;
 				if (orb_copy(ORB_ID(vehicle_local_position), _local_pos_sub, &local_pos) == PX4_OK) {
-					float current_x = local_pos.x;
-					float current_y = local_pos.y;
-					float current_z = _position(2) - (desired_hagl - dist_from_feet);
 
-					if (fabsf(current_x - last_current_x) > 0.01f || fabsf(current_y - last_current_y) > 0.01f) {
-						PX4_INFO("Center Koordinate : %.2f : %.2f : %.2f", (double)current_x, (double)current_y, (double)current_z);
-						last_current_x = current_x;
-						last_current_y = current_y;
+					if (_att_sub < 0) {
+				 		_att_sub = orb_subscribe(ORB_ID(vehicle_attitude));
 					}
 
-					_position_setpoint(2) = _position(2) - (desired_hagl - dist_from_feet);
-					_velocity_setpoint(2) = 0.f;
-					_acceleration_setpoint(2) = 0.f;
+					vehicle_attitude_s att = {};
+					if (orb_copy(ORB_ID(vehicle_attitude), _att_sub, &att) == PX4_OK) {
+						matrix::Quatf q(att.q);
+						float drone_yaw = matrix::Eulerf(q).psi();
+						// Yaw değeriniz burada!
+
+						LocalXYZ localCenterXYZ;
+						localCenterXYZ.x = local_pos.x + _param_ekf2_of_pos_x.get();
+						localCenterXYZ.y = local_pos.y + _param_ekf2_of_pos_y.get();
+						localCenterXYZ.z = _position(2) - (desired_hagl - dist_from_feet);
+						LocalXYZ localXYZ;
+						localXYZ.x = local_pos.x + _param_ekf2_of_pos_x.get();
+						localXYZ.y = local_pos.y + _param_ekf2_of_pos_y.get();
+						localXYZ.z = localCenterXYZ.z;
+						update_gps_history(localXYZ);
+
+						if (fabsf(localCenterXYZ.x  - last_current_x) > 0.01f || fabsf(localCenterXYZ.y - last_current_y) > 0.01f) {
+							PX4_INFO("Center Koordinate : %.2f : %.2f : %.2f", (double)localCenterXYZ.x, (double)localCenterXYZ.y, (double)localCenterXYZ.z);
+							last_current_x = localCenterXYZ.x;
+							last_current_y = localCenterXYZ.y;
+						}
+
+						_position_setpoint(2) = find_points_in_area(localCenterXYZ, drone_yaw);
+					}
 				}
 			}
 		}

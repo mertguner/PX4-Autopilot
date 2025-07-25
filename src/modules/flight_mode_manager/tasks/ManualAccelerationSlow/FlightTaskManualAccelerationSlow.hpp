@@ -87,7 +87,24 @@ private:
 	float last_current_y = -1.0f;
 	int _rc_sub{-1};
 	int _local_pos_sub{-1};
+	int _att_sub{-1};
+
 	const float sensor_to_foot_offset = 0.28f; // sensor sits 28 cm above the landing gear
+
+	#define MAX_HISTORY_SIZE 32
+	#define MIN_DISTANCE_M   0.05f   // 5cm
+	#define AREA_HALF        0.20f	//20cm
+
+	struct LocalXYZ {
+		float x; // ileri-geri (ön-arka)
+		float y; // sağ-sol
+		float z; // sağ-sol
+	};
+	LocalXYZ _gps_history[MAX_HISTORY_SIZE];
+    	size_t _gps_history_len = 0;
+	void update_gps_history(const LocalXYZ &current_gps);
+	bool is_point_in_rotated_square(float x, float y, float cx, float cy, float yaw_rad);
+	float find_points_in_area(const LocalXYZ &center, float yaw_rad);
 
 	DEFINE_PARAMETERS_CUSTOM_PARENT(FlightTaskManualAcceleration,
 					(ParamInt<px4::params::MC_SLOW_MAP_HVEL>) _param_mc_slow_map_hvel,
@@ -103,6 +120,8 @@ private:
 					(ParamFloat<px4::params::MPC_Z_VEL_MAX_UP>) _param_mpc_z_vel_max_up,
 					(ParamFloat<px4::params::MPC_Z_VEL_MAX_DN>) _param_mpc_z_vel_max_dn,
 					(ParamFloat<px4::params::MPC_MAN_Y_MAX>) _param_mpc_man_y_max,
-					(ParamInt<px4::params::MC_SLOW_MAP_PTCH>) _param_mc_slow_map_pitch
+					(ParamInt<px4::params::MC_SLOW_MAP_PTCH>) _param_mc_slow_map_pitch,
+                                        (ParamFloat<px4::params::EKF2_OF_POS_X>) _param_ekf2_of_pos_x,
+					(ParamFloat<px4::params::EKF2_OF_POS_Y>) _param_ekf2_of_pos_y
 				       )
 };
