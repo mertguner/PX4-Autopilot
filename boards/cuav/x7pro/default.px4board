@@ -24,6 +24,7 @@ CONFIG_DRIVERS_IMU_ANALOG_DEVICES_ADIS16470=y# ADIS16470 IMU sürücüsü
 CONFIG_DRIVERS_IMU_INVENSENSE_ICM20689=y     # ICM20689 IMU sürücüsü
 CONFIG_DRIVERS_IMU_INVENSENSE_ICM42688P=y    # ICM42688P IMU sürücüsü
 CONFIG_DRIVERS_MAGNETOMETER_RM3100=y         # RM3100 manyetometre sürücüsü
+CONFIG_DRIVERS_MAGNETOMETER_ISENTEK_IST8310=y# IST8310 manyetometre sürücüsü
 CONFIG_DRIVERS_PWM_OUT=y                     # PWM çıkış sürücüsü (motor/servo)
 CONFIG_DRIVERS_RC_INPUT=y                    # Genel RC giriş yönetici modülü
 CONFIG_DRIVERS_RC_SBUS_RC=y                  # SBUS RC protokol sürücüsü
