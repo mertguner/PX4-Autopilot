@@ -52,6 +52,7 @@
 #include <uORB/uORB.h>
 #include <systemlib/mavlink_log.h>
 #include <matrix/matrix/math.hpp>
+#include <uORB/topics/rc_channels.h>
 
 class FlightTaskManualAccelerationSlow : public FlightTaskManualAcceleration
 {
@@ -81,15 +82,21 @@ private:
 	bool haveTakenOff();
 
 	// Terrain following obstacle logic
-	float last_tf_enable_input = -1.0f;
-	float last_alt_input = -1.0f;
-	float last_current_x = -1.0f;
-	float last_current_y = -1.0f;
-	int _rc_sub{-1};
-	int _local_pos_sub{-1};
-	int _att_sub{-1};
+	float last_tf_enable_input{NAN};
+	float last_alt_input{NAN};
+	float last_current_x{NAN};
+	float last_current_y{NAN};
 
-	const float sensor_to_foot_offset = 0.28f; // sensor sits 28 cm above the landing gear
+	uORB::SubscriptionData<rc_channels_s>          _rc_sub{ORB_ID(rc_channels)};
+	uORB::SubscriptionData<vehicle_local_position_s> _local_pos_sub{ORB_ID(vehicle_local_position)};
+	uORB::SubscriptionData<vehicle_attitude_s>     _att_sub{ORB_ID(vehicle_attitude)};
+
+	float _dist_to_bottom{NAN};
+	float sensor_to_foot_offset{0.28f};
+	matrix::Vector3f _position{};           // mevcut konum vektörün
+	matrix::Vector3f _position_setpoint{};  // hedef konum vektörün
+
+	orb_advert_t _mavlink_log_pub{nullptr};
 
 	#define MAX_HISTORY_SIZE 32
 	#define MIN_DISTANCE_M   0.05f   // 5cm

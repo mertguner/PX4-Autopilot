@@ -212,69 +212,74 @@ bool FlightTaskManualAccelerationSlow::update()
 
 	bool ret = FlightTaskManualAcceleration::update();
 
-	if (_rc_sub < 0) {
-		_rc_sub = orb_subscribe(ORB_ID(input_rc));
-	}
-	if (_rc_sub >= 0) {
-    		input_rc_s rc_data;
-    		if (orb_copy(ORB_ID(input_rc), _rc_sub, &rc_data) == PX4_OK) {
-			// RC channel 5 ve 6 değerleri
-			float tf_enable_input = math::constrain(((rc_data.values[4] - 1000.0f) / 1000.0f), 0.0f, 1.0f);
-			bool terrain_active = tf_enable_input > 0.5f;
+	if (_rc_sub.update()) {
+		const rc_channels_s &rc = _rc_sub.get();
 
-			if (fabsf(tf_enable_input - last_tf_enable_input) > 0.01f) {
-            			PX4_INFO("RC Channel 5: %f", (double)tf_enable_input);
-            			last_tf_enable_input = tf_enable_input;
-        		}
+		// Link/kanal kontrolü
+		if (!rc.signal_lost && rc.channel_count >= 6) {
+
+			// CH5 → enable anahtarı (eşik 0.5)
+			const float ch5 = rc.channels[4];                 // -1..1
+			const float tf_enable_input = (ch5 + 1.f) * 0.5f; // 0..1
+			const bool terrain_active = tf_enable_input > 0.5f;
+
+			if (!PX4_ISFINITE(last_tf_enable_input) || fabsf(tf_enable_input - last_tf_enable_input) > 0.01f) {
+				mavlink_log_info(&_mavlink_log_pub, "RC Channel 5: %.2f (terrain %s)", (double)tf_enable_input, terrain_active ? "ON" : "OFF");
+				last_tf_enable_input = tf_enable_input;
+			}
 
 			if (terrain_active && PX4_ISFINITE(_dist_to_bottom)) {
-				float alt_input = math::constrain(((rc_data.values[5] - 1000.0f) / 1000.0f), 0.0f, 1.0f);
-				float desired_hagl = 0.05f + (0.25f * alt_input);
+			// CH6 → yükseklik oranı (0..1)
+			const float ch6 = rc.channels[5];                 // -1..1
+			const float alt_input = (ch6 + 1.f) * 0.5f;       // 0..1
+			const float desired_hagl = 0.05f + (0.25f * alt_input);
 
-				// actual clearance measured from the landing gear
-				const float dist_from_feet = math::max(_dist_to_bottom - sensor_to_foot_offset, 0.f);
+			// iniş takımından ölçülen clearance
+			const float dist_from_feet = math::max(_dist_to_bottom - sensor_to_foot_offset, 0.f);
 
-				if (fabsf(alt_input - last_alt_input) > 0.01f) {
-					PX4_INFO("RC Channel 6: %.2f : %.2f", (double)alt_input, (double)dist_from_feet);
-					last_alt_input = alt_input;
+			if (!PX4_ISFINITE(last_alt_input) || fabsf(alt_input - last_alt_input) > 0.01f) {
+				mavlink_log_info(&_mavlink_log_pub, "RC Channel 6: %.2f | dist_from_feet: %.2f", (double)alt_input, (double)dist_from_feet);
+				last_alt_input = alt_input;
+			}
+
+			// local position güncellendi mi?
+			if (_local_pos_sub.update()) {
+				const vehicle_local_position_s &local_pos = _local_pos_sub.get();
+
+				// attitude güncellendi mi?
+				if (_att_sub.update()) {
+				const vehicle_attitude_s &att = _att_sub.get();
+
+				const matrix::Quatf q(att.q);
+				const float drone_yaw = matrix::Eulerf(q).psi(); // gerekli yerde kullan
+
+				// merkez ve hedef nokta (senin mantığın)
+				LocalXYZ localCenterXYZ;
+				localCenterXYZ.x = local_pos.x + _param_ekf2_of_pos_x.get();
+				localCenterXYZ.y = local_pos.y + _param_ekf2_of_pos_y.get();
+				localCenterXYZ.z = _position(2) - (desired_hagl - dist_from_feet);
+
+				LocalXYZ localXYZ;
+				localXYZ.x = localCenterXYZ.x;
+				localXYZ.y = localCenterXYZ.y;
+				localXYZ.z = localCenterXYZ.z;
+
+				update_gps_history(localXYZ);
+
+				if (!PX4_ISFINITE(last_current_x) || !PX4_ISFINITE(last_current_y)
+					|| fabsf(localCenterXYZ.x - last_current_x) > 0.01f
+					|| fabsf(localCenterXYZ.y - last_current_y) > 0.01f) {
+
+					PX4_INFO("Center Koordinate : %.2f : %.2f : %.2f",
+						(double)localCenterXYZ.x, (double)localCenterXYZ.y, (double)localCenterXYZ.z);
+
+					last_current_x = localCenterXYZ.x;
+					last_current_y = localCenterXYZ.y;
 				}
 
-				if (_local_pos_sub < 0) {
-				_local_pos_sub = orb_subscribe(ORB_ID(vehicle_local_position));
+				_position_setpoint(2) = find_points_in_area(localCenterXYZ, drone_yaw);
 				}
-
-				vehicle_local_position_s local_pos;
-				if (orb_copy(ORB_ID(vehicle_local_position), _local_pos_sub, &local_pos) == PX4_OK) {
-
-					if (_att_sub < 0) {
-				 		_att_sub = orb_subscribe(ORB_ID(vehicle_attitude));
-					}
-
-					vehicle_attitude_s att = {};
-					if (orb_copy(ORB_ID(vehicle_attitude), _att_sub, &att) == PX4_OK) {
-						matrix::Quatf q(att.q);
-						float drone_yaw = matrix::Eulerf(q).psi();
-						// Yaw değeriniz burada!
-
-						LocalXYZ localCenterXYZ;
-						localCenterXYZ.x = local_pos.x + _param_ekf2_of_pos_x.get();
-						localCenterXYZ.y = local_pos.y + _param_ekf2_of_pos_y.get();
-						localCenterXYZ.z = _position(2) - (desired_hagl - dist_from_feet);
-						LocalXYZ localXYZ;
-						localXYZ.x = local_pos.x + _param_ekf2_of_pos_x.get();
-						localXYZ.y = local_pos.y + _param_ekf2_of_pos_y.get();
-						localXYZ.z = localCenterXYZ.z;
-						update_gps_history(localXYZ);
-
-						if (fabsf(localCenterXYZ.x  - last_current_x) > 0.01f || fabsf(localCenterXYZ.y - last_current_y) > 0.01f) {
-							PX4_INFO("Center Koordinate : %.2f : %.2f : %.2f", (double)localCenterXYZ.x, (double)localCenterXYZ.y, (double)localCenterXYZ.z);
-							last_current_x = localCenterXYZ.x;
-							last_current_y = localCenterXYZ.y;
-						}
-
-						_position_setpoint(2) = find_points_in_area(localCenterXYZ, drone_yaw);
-					}
-				}
+			}
 			}
 		}
 	}
